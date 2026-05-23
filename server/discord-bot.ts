@@ -1,4 +1,5 @@
 import { Client, GatewayIntentBits, EmbedBuilder } from 'discord.js';
+import os from 'os';
 
 let discordClient: Client | null = null;
 
@@ -86,10 +87,16 @@ export function initDiscordBot(
       // Check if command prefixes are used
       if (!content.startsWith('!')) return;
 
+      const isPerformanceCommand = content === '!wydajność' || content === '!performance';
+
       // STRICT CHECK: Commands can ONLY be executed in the Admin/Commands Channel
       if (commandsChannelId && message.channel.id !== commandsChannelId) {
+        // Exception: Performance command is allowed in Logs Channel if configured
+        if (isPerformanceCommand && logsChannelId && message.channel.id === logsChannelId) {
+          // Proceed to execution
+        } else {
         // Find if this is a supported command, and if so, gently redirect the user
-        const knownCommands = ['!pomoc', '!help', '!wizyty', '!list', '!potwierdz', '!confirm', '!anuluj', '!cancel', '!szczegoly', '!details', '!zresetuj'];
+        const knownCommands = ['!pomoc', '!help', '!wizyty', '!list', '!potwierdz', '!confirm', '!anuluj', '!cancel', '!szczegoly', '!details', '!zresetuj', '!wydajność', '!performance'];
         const mainPrefix = content.split(' ')[0];
         
         if (knownCommands.includes(mainPrefix)) {
@@ -99,6 +106,25 @@ export function initDiscordBot(
             .setColor(0xd93838);
           await message.reply({ embeds: [redirectEmbed] }).catch(() => {});
         }
+        return;
+        }
+      }
+
+      // Performance check command
+      if (isPerformanceCommand) {
+        const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
+        const loadAvg = os.loadavg();
+        
+        const perfEmbed = new EmbedBuilder()
+          .setTitle('📊 Wydajność Serwera • Centrum Analizy Zachowania')
+          .addFields(
+            { name: '💾 Użycie RAM', value: `${memoryUsage.toFixed(2)} MB`, inline: true },
+            { name: '⚙️ Obciążenie CPU (avg)', value: `${loadAvg[0].toFixed(2)}, ${loadAvg[1].toFixed(2)}, ${loadAvg[2].toFixed(2)}`, inline: true }
+          )
+          .setColor(0x477267)
+          .setTimestamp();
+
+        await message.reply({ embeds: [perfEmbed] }).catch(() => {});
         return;
       }
 
@@ -113,7 +139,8 @@ export function initDiscordBot(
             { name: '❌ `!anuluj <id>`', value: 'Anuluje wybraną rezerwację i zwalnia termin.' },
             { name: '🔍 `!szczegoly <id>`', value: 'Wyświetla dane kontaktowe (e-mail, telefon, historię wysłanych alertów).' },
             { name: '🔥 `!zresetuj`', value: 'Usuwa całkowicie WSZYSTKIE wizyty w systemie.' },
-            { name: '🗑️ `!zresetuj <e-mail_lub_telefon>`', value: 'Usuwa wszystkie rezerwacje powiązane z podanym adresem e-mail lub telefonem.' }
+            { name: '🗑️ `!zresetuj <e-mail_lub_telefon>`', value: 'Usuwa wszystkie rezerwacje powiązane z podanym adresem e-mail lub telefonem.' },
+            { name: '📊 `!wydajność`', value: 'Sprawdza aktualne zużycie zasobów serwera.' }
           )
           .setColor(0x477267)
           .setFooter({ text: 'Centrum Analizy Zachowania • Panel Administratora' });
@@ -420,4 +447,3 @@ export async function notifyDiscordNewBooking(appt: any) {
     }
   }
 }
-
