@@ -1,32 +1,43 @@
-services:
-  - type: web
-    name: balance-psychoterapia
-    env: node
-    plan: free
-    buildCommand: npm install && npm run build
-    startCommand: npm start
-    envVars:
-      - key: GEMINI_API_KEY
-        sync: false
-        placeholder: "Twój klucz API dla Gemini"
-      - key: APP_URL
-        sync: false
-        placeholder: "Główny adres URL Twojej aplikacji (np. https://twojadomena.pl lub adres przydzielony przez Render)"
-      - key: DISCORD_BOT_TOKEN
-        sync: false
-        placeholder: "Token bota Discord (opcjonalny)"
-      - key: DISCORD_BOOKINGS_CHANNEL_ID
-        sync: false
-        placeholder: "ID kanału Discord dla zapisów (opcjonalny)"
-      - key: DISCORD_LOGS_CHANNEL_ID
-        sync: false
-        placeholder: "ID kanału Discord dla logów (opcjonalny)"
-      - key: DISCORD_COMMANDS_CHANNEL_ID
-        sync: false
-        placeholder: "ID kanału Discord dla komend (opcjonalny)"
-      - key: STRIPE_SECRET_KEY
-        sync: false
-        placeholder: "Tajny klucz Stripe (sk_test_... lub sk_live_...)"
-      - key: STRIPE_PUBLISHABLE_KEY
-        sync: false
-        placeholder: "Klucz publiczny Stripe (pk_test_... lub pk_live_...)"
+{
+  "name": "react-example",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "start": "node dist/server.cjs",
+    "clean": "rm -rf dist server.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/nodemailer": "^8.0.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "date-fns": "^4.3.0",
+    "discord.js": "^14.26.4",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "firebase": "^12.13.0",
+    "googleapis": "^172.0.0",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "nodemailer": "^8.0.7",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "stripe": "^22.1.1",
+    "twilio": "^6.0.2",
+    "vite": "^6.2.3"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.14.0",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  }
+}

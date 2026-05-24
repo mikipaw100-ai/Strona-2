@@ -1,6 +1,10 @@
 {
-  "name": "Centrum Analizy Zachowania",
-  "description": "Nowoczesna platforma rezerwacji wizyt dla Centrum Analizy Zachowania mgr Noemi Krauze-Piwowar z integracją płatności Stripe i powiadomieniami SMS.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "projectId": "galvanized-orbit-h71nt",
+  "appId": "1:423739893873:web:d3957eed2c68a73501d3d0",
+  "apiKey": "AIzaSyBs3IZgqr_f0XHBIVCX1CCCyns3lVEKXXQ",
+  "authDomain": "galvanized-orbit-h71nt.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-dae9255a-c349-45a8-8b8a-dd788519c600",
+  "storageBucket": "galvanized-orbit-h71nt.firebasestorage.app",
+  "messagingSenderId": "423739893873",
+  "measurementId": ""
 }
