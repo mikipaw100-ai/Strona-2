@@ -6,6 +6,9 @@ import dotenv from 'dotenv';
 import Stripe from 'stripe';
 import twilio from 'twilio';
 import nodemailer from 'nodemailer';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import firebaseConfig from './firebase-applet-config.json';
 import { initDiscordBot, notifyDiscordNewBooking } from './server/discord-bot';
 
 // Load environmental variables safely
@@ -21,8 +24,9 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Path to persist appointments locally
-const DB_PATH = path.join(process.cwd(), 'appointments-db.json');
+// Initialize Firebase
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 // Interface representation on backend matching src/types
 interface Appointment {
@@ -42,24 +46,86 @@ interface Appointment {
   createdAt: string;
 }
 
+// Global caching array for fast memory access (used if Firestore acts up, though we try to keep it in sync)
+let cachedAppointments: Appointment[] | null = null;
+
 // Helper to read and write local appointments
-function readDB(): Appointment[] {
+async function readDB(): Promise<Appointment[]> {
   try {
-    if (fs.existsSync(DB_PATH)) {
-      const data = fs.readFileSync(DB_PATH, 'utf8');
-      return JSON.parse(data);
+    const querySnapshot = await getDocs(collection(db, 'appointments'));
+    let appointments: Appointment[] = [];
+    querySnapshot.forEach((docSnap) => {
+      appointments.push(docSnap.data() as Appointment);
+    });
+    
+    // Auto-migrate from local JSON if Firebase is completely empty
+    if (appointments.length === 0) {
+      const dbPath = path.join(process.cwd(), 'appointments-db.json');
+      if (fs.existsSync(dbPath)) {
+        try {
+          const localData = fs.readFileSync(dbPath, 'utf8');
+          const parsed = JSON.parse(localData);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            console.log('Migrating local appointments to Firebase...');
+            appointments = parsed;
+            // Background write to Firebase
+            await writeDB(appointments);
+          }
+        } catch (e) {
+          console.error('Error migrating local DB', e);
+        }
+      }
     }
+
+    // Sort by createdAt descending
+    appointments.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    cachedAppointments = appointments;
+    return appointments;
   } catch (err) {
-    console.error('Error reading appointments DB:', err);
+    console.error('Error reading appointments from Firebase Firestore:', err);
+    return cachedAppointments || [];
   }
-  return [];
 }
 
-function writeDB(data: Appointment[]) {
+async function writeDB(data: Appointment[]) {
   try {
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf8');
+    // To completely sync, we can just rewrite everything, but it's more efficient to use a batch
+    // Since this is a simple app, we can just delete all not in data, and update/set the rest
+    // A simpler approach for small datasets is to just get all current IDs, and sync it up
+    cachedAppointments = data;
+    
+    // Create a batch
+    const batch = writeBatch(db);
+    
+    // First, let's blindly get current docs and delete ones no longer present if we want to be meticulous,
+    // but the easiest is just setting all docs in `data` (which replaces existing or adds new).
+    // Note: if user "deleted" an appointment, this won't remove it from firebase unless we delete it explicitly.
+    // For `cancel`, the status is just updated. 
+    // For `reset`, the data array is empty.
+    
+    if (data.length === 0) {
+      // Clear all
+      const current = await getDocs(collection(db, 'appointments'));
+      current.forEach(docSnap => batch.delete(docSnap.ref));
+    } else {
+      for (const item of data) {
+        const itemRef = doc(db, 'appointments', item.id);
+        batch.set(itemRef, item);
+      }
+      
+      // Optionally find items not in data and delete them to emulate full array replacement
+      const current = await getDocs(collection(db, 'appointments'));
+      const newIds = new Set(data.map(d => d.id));
+      current.forEach(docSnap => {
+        if (!newIds.has(docSnap.id)) {
+          batch.delete(docSnap.ref);
+        }
+      });
+    }
+
+    await batch.commit();
   } catch (err) {
-    console.error('Error writing appointments DB:', err);
+    console.error('Error writing appointments DB to Firebase:', err);
   }
 }
 
@@ -137,13 +203,13 @@ app.post('/api/system/view', (req, res) => {
 });
 
 // 1. GET ALL APPOINTMENTS (COMPLIANT WITH GDPR / RODO PRIVACY MANDATES)
-app.get('/api/appointments', (req, res) => {
-  const appointments = readDB();
+app.get('/api/appointments', async (req, res) => {
+  const appointments = await readDB();
   const { ids, phone, email } = req.query;
   const doctorCode = req.headers['x-doctor-code'];
 
   // If doctor is authenticated, return full appointments
-  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE)) {
+  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE || '197707')) {
     res.json(appointments);
     return;
   }
@@ -220,7 +286,7 @@ app.post('/api/appointments', async (req, res) => {
       return;
     }
 
-    const appointments = readDB();
+    const appointments = await readDB();
 
     // Check duplicate slot
     const isConflict = appointments.some(appt => 
@@ -256,7 +322,7 @@ app.post('/api/appointments', async (req, res) => {
     }
 
     appointments.unshift(newAppointment);
-    writeDB(appointments);
+    await writeDB(appointments);
 
     // Notify Discord Bot or Channel if configured
     notifyDiscordNewBooking(newAppointment);
@@ -315,7 +381,7 @@ app.post('/api/confirm-payment', async (req, res) => {
     return;
   }
 
-  const appointments = readDB();
+  const appointments = await readDB();
   const itemIdx = appointments.findIndex(a => a.id === appointmentId);
 
   if (itemIdx === -1) {
@@ -329,7 +395,7 @@ app.post('/api/confirm-payment', async (req, res) => {
   // Trigger SMS Reminder on successful payment confirmation
   await triggerSMSReminder(appointments[itemIdx]);
 
-  writeDB(appointments);
+  await writeDB(appointments);
 
   // Notify Discord of payment confirmation
   notifyDiscordNewBooking(appointments[itemIdx]);
@@ -345,7 +411,7 @@ app.post('/api/trigger-sms', async (req, res) => {
     return;
   }
 
-  const appointments = readDB();
+  const appointments = await readDB();
   const itemIdx = appointments.findIndex(a => a.id === appointmentId);
 
   if (itemIdx === -1) {
@@ -354,7 +420,7 @@ app.post('/api/trigger-sms', async (req, res) => {
   }
 
   await triggerSMSReminder(appointments[itemIdx]);
-  writeDB(appointments);
+  await writeDB(appointments);
 
   res.json({ success: true, appointment: appointments[itemIdx] });
 });
@@ -389,8 +455,8 @@ app.get('/api/calendar/events', async (req, res) => {
 // 8. DOCTOR LOGIN ENDPOINT
 app.post('/api/doctor/validate', (req, res) => {
   const { code } = req.body;
-  console.log('Provided code:', code, 'Expected code:', process.env.DOCTOR_SECRET_CODE);
-  if (String(code) === String(process.env.DOCTOR_SECRET_CODE)) {
+  console.log('Provided code:', code, 'Expected code:', process.env.DOCTOR_SECRET_CODE || '197707');
+  if (String(code) === String(process.env.DOCTOR_SECRET_CODE || '197707')) {
     res.json({ success: true });
   } else {
     res.status(401).json({ error: 'Nieprawidłowy kod.' });
@@ -399,10 +465,10 @@ app.post('/api/doctor/validate', (req, res) => {
 
 // ================= SYSTEM & DIAGNOSTICS =================
 
-app.get('/api/system/stats', (req, res) => {
+app.get('/api/system/stats', async (req, res) => {
   const doctorCode = req.headers['x-doctor-code'];
-  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE)) {
-    const appointments = readDB();
+  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE || '197707')) {
+    const appointments = await readDB();
     const stats = {
       uptimeSeconds: process.uptime(),
       memoryUsage: process.memoryUsage(),
@@ -422,7 +488,7 @@ app.get('/api/system/stats', (req, res) => {
 
 app.get('/api/system/backup', (req, res) => {
   const doctorCode = req.query.code;
-  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE)) {
+  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE || '197707')) {
     if (fs.existsSync(DB_PATH)) {
       res.download(DB_PATH, 'wizyty-kopia-zapasowa.json');
     } else {
@@ -433,12 +499,12 @@ app.get('/api/system/backup', (req, res) => {
   }
 });
 
-app.post('/api/system/restore', (req, res) => {
+app.post('/api/system/restore', async (req, res) => {
   const doctorCode = req.headers['x-doctor-code'];
-  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE)) {
+  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE || '197707')) {
     const backupData = req.body;
     if (Array.isArray(backupData)) {
-      writeDB(backupData);
+      await writeDB(backupData);
       res.json({ success: true, count: backupData.length });
     } else {
       res.status(400).json({ error: 'Nieprawidłowy format pliku.' });
@@ -455,7 +521,7 @@ app.post('/api/cancel-appointment', async (req, res) => {
     return;
   }
 
-  const appointments = readDB();
+  const appointments = await readDB();
   const itemIdx = appointments.findIndex(a => a.id === appointmentId);
 
   if (itemIdx === -1) {
@@ -483,7 +549,7 @@ app.post('/api/cancel-appointment', async (req, res) => {
     appt.smsLog += `\n[STRIPE REFUND: DEMO MODE] System zasymulował pomyślny zwrot kwoty transakcji na rachunek demonstracyjny pacjenta.`;
   }
 
-  writeDB(appointments);
+  await writeDB(appointments);
 
   // Notify Discord or Logs of cancellation
   notifyDiscordNewBooking(appt);

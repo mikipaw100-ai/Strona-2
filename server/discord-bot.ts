@@ -9,16 +9,16 @@ let logsChannelId: string | null = null;
 let commandsChannelId: string | null = null;
 
 // Clean references passed from server.ts to avoid circular dependencies
-let getAppointmentsList: () => any[] = () => [];
-let saveAppointmentsList: (data: any[]) => void = () => {};
+let getAppointmentsList: () => Promise<any[]> = async () => [];
+let saveAppointmentsList: (data: any[]) => Promise<void> = async () => {};
 let sendNotifications: (appt: any) => Promise<void> = async () => {};
 let getPageViews: () => Record<string, number> = () => ({});
 let getSystemState: () => { systemLocked: boolean } = () => ({ systemLocked: false });
 let setSystemLocked: (locked: boolean) => void = () => {};
 
 export function initDiscordBot(
-  readDB: () => any[],
-  writeDB: (data: any[]) => void,
+  readDB: () => Promise<any[]>,
+  writeDB: (data: any[]) => Promise<void>,
   triggerSMSReminder: (appt: any) => Promise<void>,
   pageViews: Record<string, number> = {},
   getSystemStateFn?: () => { systemLocked: boolean },
@@ -163,7 +163,7 @@ export function initDiscordBot(
 
       // List all bookings
       if (content === '!wizyty' || content === '!list') {
-        const appts = getAppointmentsList();
+        const appts = await getAppointmentsList();
         if (appts.length === 0) {
           await message.reply('Brak zarejestrowanych wizyt w systemie. Kalendarz jest czysty!').catch(() => {});
           return;
@@ -210,7 +210,7 @@ export function initDiscordBot(
         
         await message.channel.sendTyping();
         await sendNotifications(appt);
-        saveAppointmentsList(appts);
+        await saveAppointmentsList(appts);
 
         const successEmbed = new EmbedBuilder()
           .setTitle('✅ Wizyta Potwierdzona z Discorda!')
@@ -258,7 +258,7 @@ export function initDiscordBot(
 
         const appt = appts[apptIdx];
         appt.status = 'cancelled';
-        saveAppointmentsList(appts);
+        await saveAppointmentsList(appts);
 
         const cancelEmbed = new EmbedBuilder()
           .setTitle('🔴 Wizyta Anulowana')
@@ -293,7 +293,7 @@ export function initDiscordBot(
           return;
         }
 
-        const appts = getAppointmentsList();
+        const appts = await getAppointmentsList();
         const appt = appts.find(a => a.id === id);
 
         if (!appt) {
@@ -326,7 +326,7 @@ export function initDiscordBot(
 
       // Chart Command (QuickChart io integration)
       if (content === '!wykres' || content === '!wykresy') {
-        const appts = getAppointmentsList();
+        const appts = await getAppointmentsList();
         const views = getPageViews();
 
         const pending = appts.filter(a => a.status === 'pending_payment').length;
@@ -392,11 +392,11 @@ export function initDiscordBot(
         const parts = content.split(' ');
         const target = parts[1]; // can be an email or a phone
 
-        const appts = getAppointmentsList();
+        const appts = await getAppointmentsList();
 
         if (!target) {
           // Reset all appointments
-          saveAppointmentsList([]);
+          await saveAppointmentsList([]);
           
           const resetAllEmbed = new EmbedBuilder()
             .setTitle('🔥 Pełny Reset Bazy Wizyt')
@@ -439,7 +439,7 @@ export function initDiscordBot(
           return;
         }
 
-        saveAppointmentsList(filteredAppts);
+        await saveAppointmentsList(filteredAppts);
 
         const resetUserEmbed = new EmbedBuilder()
           .setTitle('🗑️ Usunięcie rezerwacji pacjenta')
@@ -485,7 +485,7 @@ export function initDiscordBot(
       }
 
       if (content === '!statystyki') {
-        const appts = getAppointmentsList();
+        const appts = await getAppointmentsList();
         const views = getPageViews();
         const viewsTotal = Object.values(views).reduce((a, b) => a + b, 0);
         const revenue = appts.filter(a => a.status === 'confirmed').length * 200;
@@ -502,9 +502,10 @@ export function initDiscordBot(
       }
 
       if (content === '!backup') {
-        import('fs').then(fs => {
+        import('fs').then(async fs => {
             const tempFile = './backup_temp.json';
-            fs.writeFileSync(tempFile, JSON.stringify(getAppointmentsList(), null, 2));
+            const appointments = await getAppointmentsList();
+            fs.writeFileSync(tempFile, JSON.stringify(appointments, null, 2));
             message.reply({
               content: '📂 Oto najnowszy plik z kopią zapasową bazy danych (JSON).',
               files: [tempFile]
@@ -515,7 +516,8 @@ export function initDiscordBot(
 
       if (content.startsWith('!szukaj ')) {
         const query = content.substring('!szukaj '.length).trim().toLowerCase();
-        const matches = getAppointmentsList().filter(a => 
+        const appointments = await getAppointmentsList();
+        const matches = appointments.filter((a: any) => 
           a.patientName.toLowerCase().includes(query) || 
           a.patientEmail?.toLowerCase().includes(query)
         );
@@ -531,7 +533,8 @@ export function initDiscordBot(
 
       if (content === '!dzisiaj') {
         const today = new Date().toISOString().split('T')[0];
-        const matches = getAppointmentsList().filter(a => a.date === today && a.status !== 'cancelled');
+        const appointments = await getAppointmentsList();
+        const matches = appointments.filter((a: any) => a.date === today && a.status !== 'cancelled');
         if(matches.length === 0) {
           await message.reply('Brak aktywnych wizyt na dzisiaj.').catch(()=>{}); return;
         }
@@ -543,7 +546,8 @@ export function initDiscordBot(
       if (content === '!jutro') {
         const d = new Date(); d.setDate(d.getDate() + 1);
         const tomorrow = d.toISOString().split('T')[0];
-        const matches = getAppointmentsList().filter(a => a.date === tomorrow && a.status !== 'cancelled');
+        const appointments = await getAppointmentsList();
+        const matches = appointments.filter((a: any) => a.date === tomorrow && a.status !== 'cancelled');
         if(matches.length === 0) {
           await message.reply('Brak aktywnych wizyt na jutro.').catch(()=>{}); return;
         }
@@ -559,14 +563,14 @@ export function initDiscordBot(
         }
         const id = args[1];
         const msg = args.slice(2).join(' ');
-        const appts = getAppointmentsList();
+        const appts = await getAppointmentsList();
         const appt = appts.find(a => a.id === id);
         if (!appt) {
           await message.reply('❌ Nie znaleziono takiej wizyty.').catch(()=>{}); return;
         }
         appt.smsLog = (appt.smsLog || '') + `\n[Discord Admin] Niestandardowa wiadomość: ${msg}`;
-        saveAppointmentsList(appts);
-        await message.reply(`✉️ Przypięto wiadomość administracyjną do logów pacjenta **${appt.patientName}**.`).catch(()=>{});
+        await saveAppointmentsList(appts);
+        await message.reply(`✉️ Przypięto wiadomość administracyjną do logów pacjenta **${appt.patientName}**.`);
         return;
       }
 

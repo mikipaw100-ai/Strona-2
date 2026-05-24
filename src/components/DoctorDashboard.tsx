@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, Lock, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Phone, Mail, CheckCircle2, XCircle, Bell, ChevronDown, ChevronUp, Loader2, Activity, Settings2, ShieldCheck, Database, Server, Download, Upload } from 'lucide-react';
+import { User, Lock, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Phone, Mail, CheckCircle2, XCircle, Bell, ChevronDown, ChevronUp, Loader2, Activity, Settings2, ShieldCheck, Database, Server, Download, Upload, PenTool, Calculator, FileText } from 'lucide-react';
 import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay } from 'date-fns';
 import { pl } from 'date-fns/locale';
 
@@ -17,13 +17,31 @@ export default function DoctorDashboard({ onLogin }: Props) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   
-  const [activeTab, setActiveTab] = useState<'calendar' | 'system'>('calendar');
+  const [activeTab, setActiveTab] = useState<'calendar' | 'system' | 'tools'>('calendar');
   const [stats, setStats] = useState<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [expandedApptId, setExpandedApptId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<{ id: string, action: string } | null>(null);
   const [backupLoading, setBackupLoading] = useState(false);
+  
+  // Tools state
+  const [weight, setWeight] = useState('');
+  const [height, setHeight] = useState('');
+  const [bmiResult, setBmiResult] = useState<number | null>(null);
+  const [doctorNotes, setDoctorNotes] = useState(localStorage.getItem('doctorNotes') || '');
+
+  const calculateBMI = () => {
+    const w = parseFloat(weight);
+    const h = parseFloat(height) / 100;
+    if (w > 0 && h > 0) {
+      setBmiResult(w / (h * h));
+    }
+  };
+
+  useEffect(() => {
+    localStorage.setItem('doctorNotes', doctorNotes);
+  }, [doctorNotes]);
 
   const fetchAppointments = async (code: string = lookupQuery) => {
     const apptRes = await fetch('/api/appointments', {
@@ -181,6 +199,12 @@ export default function DoctorDashboard({ onLogin }: Props) {
                             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition ${activeTab === 'calendar' ? 'bg-[#477267] text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}
                         >
                             <CalendarIcon className="w-4 h-4" /> Kalendarz
+                        </button>
+                        <button 
+                            onClick={() => setActiveTab('tools')}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition ${activeTab === 'tools' ? 'bg-[#477267] text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}
+                        >
+                            <PenTool className="w-4 h-4" /> Narzędzia
                         </button>
                         <button 
                             onClick={() => setActiveTab('system')}
@@ -477,6 +501,77 @@ export default function DoctorDashboard({ onLogin }: Props) {
                                         {backupLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                                         Wgraj z pliku (Przywróć)
                                     </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {activeTab === 'tools' && (
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+                            <h2 className="text-lg font-bold font-serif text-[#477267] border-b pb-2 flex items-center gap-2">
+                                <PenTool className="w-5 h-5" /> Przydatne Narzędzia
+                            </h2>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                {/* Kalkulator BMI */}
+                                <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-sm space-y-4">
+                                    <h3 className="font-bold text-sm text-stone-800 flex items-center gap-2">
+                                        <Calculator className="w-4 h-4 text-[#477267]" /> Kalkulator BMI
+                                    </h3>
+                                    
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest block mb-1">Waga (kg)</label>
+                                            <input 
+                                                type="number" 
+                                                value={weight}
+                                                onChange={(e) => setWeight(e.target.value)}
+                                                className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#477267]"
+                                                placeholder="np. 70"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-stone-500 uppercase tracking-widest block mb-1">Wzrost (cm)</label>
+                                            <input 
+                                                type="number" 
+                                                value={height}
+                                                onChange={(e) => setHeight(e.target.value)}
+                                                className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#477267]"
+                                                placeholder="np. 175"
+                                            />
+                                        </div>
+                                    </div>
+                                    
+                                    <button 
+                                        onClick={calculateBMI}
+                                        className="w-full bg-stone-100 hover:bg-stone-200 text-stone-800 font-bold py-2 rounded-xl text-sm transition"
+                                    >
+                                        Oblicz BMI
+                                    </button>
+                                    
+                                    {bmiResult !== null && (
+                                        <div className={`mt-3 p-3 rounded-xl border ${bmiResult < 18.5 ? 'bg-blue-50 border-blue-200 text-blue-800' : bmiResult < 25 ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'} text-center`}>
+                                            <div className="text-xs uppercase font-bold opacity-80">Twój wynik BMI</div>
+                                            <div className="text-2xl font-bold font-mono">{bmiResult.toFixed(1)}</div>
+                                            <div className="text-xs font-medium mt-1">
+                                                {bmiResult < 18.5 ? 'Niedowaga' : bmiResult < 25 ? 'Waga prawidłowa' : bmiResult < 30 ? 'Nadwaga' : 'Otyłość'}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                {/* Notatnik lekarski */}
+                                <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-sm space-y-4">
+                                    <h3 className="font-bold text-sm text-stone-800 flex items-center gap-2">
+                                        <FileText className="w-4 h-4 text-[#477267]" /> Szybki Notatnik
+                                    </h3>
+                                    <p className="text-[10px] text-stone-500">Zapisuj myśli lub podręczne informacje. Zapisywane lokalnie.</p>
+                                    <textarea
+                                        value={doctorNotes}
+                                        onChange={(e) => setDoctorNotes(e.target.value)}
+                                        placeholder="Miejsce na notatki..."
+                                        className="w-full h-48 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIyOCI+PHBhdGggZD0iTTAgMjhoMTB2LTFIMHoiIGZpbGw9IiNlN2U1ZTQiIGZpbGwtcnVsZT0iZXZlbm9kZCIvPjwvc3ZnPg==')] leading-[28px] bg-local bg-stone-50 border border-stone-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-[#477267] resize-none"
+                                    ></textarea>
                                 </div>
                             </div>
                         </motion.div>
