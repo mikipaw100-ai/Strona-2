@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Doctor, Appointment } from '../types';
 import { 
   X, 
@@ -21,11 +21,13 @@ interface BookingModalProps {
   doctor: Doctor;
   date: string;
   timeSlot: string;
+  token: string | null;
+  onLogin: () => Promise<void>;
   onClose: () => void;
   onSuccess: (appointment: Appointment) => void;
 }
 
-export default function BookingModal({ doctor, date, timeSlot, onClose, onSuccess }: BookingModalProps) {
+export default function BookingModal({ doctor, date, timeSlot, token, onLogin, onClose, onSuccess }: BookingModalProps) {
   const [step, setStep] = useState<'details' | 'stripe_模擬' | 'completed'>('details');
   const [patientName, setPatientName] = useState('');
   const [patientEmail, setPatientEmail] = useState('');
@@ -122,6 +124,7 @@ export default function BookingModal({ doctor, date, timeSlot, onClose, onSucces
         // For onsite cash/card payments, reservation is instantly fully confirmed
         setStep('completed');
         onSuccess(bookedAppt);
+        syncToGoogleCalendar(bookedAppt);
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'Błąd połączenia z serwerem. Spróbuj ponownie.');
@@ -154,6 +157,7 @@ export default function BookingModal({ doctor, date, timeSlot, onClose, onSucces
         setActiveAppointment(finalizedData.appointment);
         setStep('completed');
         onSuccess(finalizedData.appointment);
+        syncToGoogleCalendar(finalizedData.appointment);
       } else {
         alert('Stripe odrzucił transakcję. Sprawdź parametry karty.');
       }
@@ -163,6 +167,57 @@ export default function BookingModal({ doctor, date, timeSlot, onClose, onSucces
       setIsPaying(false);
     }
   };
+
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+
+  const syncToGoogleCalendar = async (appointment: Appointment) => {
+    if (!token) return;
+    setIsSyncing(true);
+    setSyncStatus('Synchronizacja z Google Calendar...');
+    const [hour, minute] = appointment.timeSlot.split(':');
+    const start = new Date(appointment.date);
+    start.setHours(parseInt(hour), parseInt(minute));
+    const end = new Date(start.getTime() + 50 * 60000);
+
+    const event = {
+        summary: `Wizyta: ${appointment.doctorName}`,
+        description: `Pacjent: ${appointment.patientName}, Telefon: ${appointment.patientPhone}`,
+        start: { dateTime: start.toISOString() },
+        end: { dateTime: end.toISOString() }
+    };
+
+    try {
+        const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+            method: 'POST',
+            headers: { 
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(event)
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Failed to sync to Google Calendar. Response:', response.status, errorText);
+            setSyncStatus('Błąd synchronizacji z Google Calendar: ' + response.statusText);
+        } else {
+            console.log('Successfully synced to Google Calendar');
+            setSyncStatus('Pomyślnie zsynchronizowano z Google Calendar!');
+        }
+    } catch (e) {
+        console.error('Failed to sync to Google Calendar', e);
+        setSyncStatus('Błąd sieci podczas synchronizacji z Google Calendar.');
+    } finally {
+        setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (token && syncStatus === 'Oczekuje na logowanie...' && activeAppointment) {
+      syncToGoogleCalendar(activeAppointment);
+    }
+  }, [token, syncStatus, activeAppointment]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/85 backdrop-blur-sm overflow-y-auto">
@@ -526,6 +581,30 @@ export default function BookingModal({ doctor, date, timeSlot, onClose, onSucces
                       </span>
                     </div>
                   </div>
+                )}
+
+                {/* Google Calendar Sync Status */}
+                {syncStatus && (
+                  <div className={`p-3 border rounded-xl text-[11px] leading-relaxed max-w-sm mx-auto text-left flex gap-2 ${isSyncing ? 'bg-amber-50 text-amber-800 border-amber-200' : syncStatus.includes('Błąd') ? 'bg-red-50 text-red-800 border-red-200' : 'bg-green-50 text-green-800 border-green-200'}`}>
+                    {isSyncing ? <Loader2 className="w-5 h-5 animate-spin shrink-0 mt-0.5" /> : <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />}
+                    <div>
+                        <span className="font-semibold block">{isSyncing ? 'Synchronizowanie...' : 'Status Google Calendar'}</span>
+                        {syncStatus}
+                    </div>
+                  </div>
+                )}
+
+                {!token && activeAppointment && !syncStatus && (
+                  <button
+                    onClick={async () => {
+                      setSyncStatus('Oczekuje na logowanie...');
+                      await onLogin();
+                    }}
+                    className="flex items-center justify-center gap-2 w-full max-w-xs mx-auto border border-stone-300 hover:bg-stone-50 text-stone-700 px-6 py-2 rounded-xl text-xs font-semibold cursor-pointer select-none transition"
+                  >
+                    <Calendar className="w-4 h-4 text-blue-600" />
+                    Dodaj do Kalendarza Google
+                  </button>
                 )}
 
                 {/* Message reminders alert mockup */}

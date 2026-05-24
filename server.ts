@@ -16,6 +16,11 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Endpoint for monitoring tools (e.g., Uptime Robot)
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 // Path to persist appointments locally
 const DB_PATH = path.join(process.cwd(), 'appointments-db.json');
 
@@ -121,34 +126,53 @@ function getTelegram() {
 
 // ================= API ENDPOINTS =================
 
+// Simple in-memory analytics store for page views
+const pageViews: Record<string, number> = {};
+let systemLocked = false;
+
+app.post('/api/system/view', (req, res) => {
+  const today = new Date().toISOString().split('T')[0];
+  pageViews[today] = (pageViews[today] || 0) + 1;
+  res.json({ success: true, count: pageViews[today] });
+});
+
 // 1. GET ALL APPOINTMENTS (COMPLIANT WITH GDPR / RODO PRIVACY MANDATES)
 app.get('/api/appointments', (req, res) => {
   const appointments = readDB();
   const { ids, phone, email } = req.query;
+  const doctorCode = req.headers['x-doctor-code'];
 
-  // If specific search criteria are passed, return Full appointments matching the filters
+  // If doctor is authenticated, return full appointments
+  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE)) {
+    res.json(appointments);
+    return;
+  }
   if (ids || phone || email) {
-    let filtered = [...appointments];
+    let result = new Set<any>();
 
     if (ids) {
       const idList = String(ids).split(',').map(id => id.trim());
-      filtered = filtered.filter(appt => idList.includes(appt.id));
+      appointments.forEach(appt => {
+        if (idList.includes(appt.id)) result.add(appt);
+      });
     }
 
     if (phone) {
       const cleanSearchPhone = String(phone).replace(/\s+/g, '').replace('+', '');
-      filtered = filtered.filter(appt => {
+      appointments.forEach(appt => {
         const cleanApptPhone = appt.patientPhone.replace(/\s+/g, '').replace('+', '');
-        return cleanApptPhone.includes(cleanSearchPhone);
+        if (cleanApptPhone.includes(cleanSearchPhone)) result.add(appt);
       });
     }
 
     if (email) {
       const cleanEmail = String(email).trim().toLowerCase();
-      filtered = filtered.filter(appt => appt.patientEmail.trim().toLowerCase().includes(cleanEmail));
+      appointments.forEach(appt => {
+        if (appt.patientEmail.trim().toLowerCase().includes(cleanEmail)) result.add(appt);
+      });
     }
 
-    res.json(filtered);
+    res.json(Array.from(result));
     return;
   }
 
@@ -174,6 +198,11 @@ app.get('/api/appointments', (req, res) => {
 
 // 2. CREATE A COMFIRMED OR PENDING BOOKING
 app.post('/api/appointments', async (req, res) => {
+  if (systemLocked) {
+    res.status(503).json({ error: 'System rezerwacji jest obecnie zablokowany (przerwa techniczna).' });
+    return;
+  }
+  
   try {
     const { 
       doctorId, 
@@ -330,7 +359,95 @@ app.post('/api/trigger-sms', async (req, res) => {
   res.json({ success: true, appointment: appointments[itemIdx] });
 });
 
-// 6. CANCEL APPOINTMENT ENDPOINT
+// 7. GOOGLE CALENDAR API ENDPOINT (For Doctor Dashboard)
+app.get('/api/calendar/events', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  
+  const token = authHeader.split(' ')[1];
+  
+  try {
+    const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    
+    if (!response.ok) {
+        throw new Error('Failed to fetch events from Google Calendar');
+    }
+
+    const data = await response.json();
+    res.json(data.items || []);
+  } catch (err: any) {
+    console.error('Error fetching calendar events:', err);
+    res.status(500).json({ error: 'Failed to fetch calendar events' });
+  }
+});
+
+// 8. DOCTOR LOGIN ENDPOINT
+app.post('/api/doctor/validate', (req, res) => {
+  const { code } = req.body;
+  console.log('Provided code:', code, 'Expected code:', process.env.DOCTOR_SECRET_CODE);
+  if (String(code) === String(process.env.DOCTOR_SECRET_CODE)) {
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ error: 'Nieprawidłowy kod.' });
+  }
+});
+
+// ================= SYSTEM & DIAGNOSTICS =================
+
+app.get('/api/system/stats', (req, res) => {
+  const doctorCode = req.headers['x-doctor-code'];
+  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE)) {
+    const appointments = readDB();
+    const stats = {
+      uptimeSeconds: process.uptime(),
+      memoryUsage: process.memoryUsage(),
+      dbRecords: appointments.length,
+      platform: process.platform,
+      nodeVersion: process.version,
+      systemLocked,
+      hasSmtp: !!process.env.SMTP_USER,
+      hasTwilio: !!process.env.TWILIO_ACCOUNT_SID,
+      hasTelegram: !!process.env.TELEGRAM_BOT_TOKEN
+    };
+    res.json(stats);
+  } else {
+    res.status(401).json({ error: 'Nieprawidłowy kod.' });
+  }
+});
+
+app.get('/api/system/backup', (req, res) => {
+  const doctorCode = req.query.code;
+  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE)) {
+    if (fs.existsSync(DB_PATH)) {
+      res.download(DB_PATH, 'wizyty-kopia-zapasowa.json');
+    } else {
+      res.json([]);
+    }
+  } else {
+    res.status(401).json({ error: 'Nieprawidłowy kod.' });
+  }
+});
+
+app.post('/api/system/restore', (req, res) => {
+  const doctorCode = req.headers['x-doctor-code'];
+  if (doctorCode && String(doctorCode) === String(process.env.DOCTOR_SECRET_CODE)) {
+    const backupData = req.body;
+    if (Array.isArray(backupData)) {
+      writeDB(backupData);
+      res.json({ success: true, count: backupData.length });
+    } else {
+      res.status(400).json({ error: 'Nieprawidłowy format pliku.' });
+    }
+  } else {
+    res.status(401).json({ error: 'Nieprawidłowy kod.' });
+  }
+});
+
 app.post('/api/cancel-appointment', async (req, res) => {
   const { appointmentId } = req.body;
   if (!appointmentId) {
@@ -487,7 +604,10 @@ async function triggerSMSReminder(appt: Appointment) {
 
 async function startServer() {
   // Start Discord Bot manager
-  initDiscordBot(readDB, writeDB, triggerSMSReminder);
+  initDiscordBot(readDB, writeDB, triggerSMSReminder, pageViews, 
+    () => ({ systemLocked }), 
+    (locked: boolean) => { systemLocked = locked; }
+  );
 
   // Vite dev or production static serving
   if (process.env.NODE_ENV !== 'production') {

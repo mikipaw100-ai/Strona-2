@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
+import firebaseConfig from '../firebase-applet-config.json';
 import { Doctor, Appointment } from './types';
 import { DOCTORS, getFutureDateString } from './data';
 import BookingModal from './components/BookingModal';
 import ReviewList from './components/ReviewList';
+import DoctorDashboard from './components/DoctorDashboard';
 import { 
   Heart, 
   Calendar, 
   Clock, 
-  User, 
+  User as UserIcon, 
   Phone, 
   Mail, 
   CreditCard, 
@@ -31,15 +35,91 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
+provider.addScope('https://www.googleapis.com/auth/calendar');
+
+// State for auth
+let cachedAccessToken: string | null = null;
+let isSigningIn = false;
+
+// Initialize auth
+const initAuth = (
+  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthFailure?: () => void
+) => {
+  return onAuthStateChanged(auth, async (user: User | null) => {
+    if (user) {
+        // Here, we'd normally get a fresh token. For now, this is a simplified flow.
+        if (onAuthSuccess && cachedAccessToken) onAuthSuccess(user, cachedAccessToken);
+    } else {
+      cachedAccessToken = null;
+      if (onAuthFailure) onAuthFailure();
+    }
+  });
+};
+
+const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  try {
+    isSigningIn = true;
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (!credential?.accessToken) {
+      throw new Error('Failed to get access token');
+    }
+    cachedAccessToken = credential.accessToken;
+    return { user: result.user, accessToken: cachedAccessToken };
+  } catch (error: any) {
+    if (error.code === 'auth/popup-closed-by-user') {
+      console.warn('Użytkownik zamknął okno logowania.');
+      return null;
+    }
+    console.error('Sign in error:', error);
+    throw error;
+  } finally {
+    isSigningIn = false;
+  }
+};
+
 export default function App() {
   // Navigation tabs state
-  const [activeTab, setActiveTab] = useState<'booking' | 'appointments' | 'about' | 'faq'>('booking');
+  const [activeTab, setActiveTab] = useState<'booking' | 'appointments' | 'about' | 'faq' | 'doctor'>('booking');
 
   // Interactive filters
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSpecialization, setSelectedSpecialization] = useState('All');
+  const [currentWeekOffset, setCurrentWeekOffset] = useState(0); 
+  
+  // Auth state
+  const [token, setToken] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [needsAuth, setNeedsAuth] = useState(false);
 
-  // Appointments database loaded from database in Express backend (Sanitized for slot availability check)
+  useEffect(() => {
+    // Record page view analytics
+    fetch('/api/system/view', { method: 'POST' }).catch(() => {});
+
+    initAuth(
+      (user, token) => { setUser(user); setToken(token); setNeedsAuth(false); },
+      () => { setUser(null); setToken(null); setNeedsAuth(true); }
+    );
+  }, []);
+
+  const handleLogin = async () => {
+    try {
+      const result = await googleSignIn();
+      if (result) {
+        setToken(result.accessToken);
+        setUser(result.user);
+        setNeedsAuth(false);
+      }
+    } catch (err) {
+      console.error('Login failed:', err);
+    }
+  };
+
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loadingAppts, setLoadingAppts] = useState(false);
   const [smsRefreshStates, setSmsRefreshStates] = useState<Record<string, boolean>>({});
@@ -223,85 +303,88 @@ export default function App() {
 
       {/* COMPACT STYLISH LOGO HEADER */}
       <header className="sticky top-0 bg-[#FAF9F5]/90 backdrop-blur-md border-b border-stone-200/60 z-30 transition">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div className="text-left cursor-pointer flex items-center gap-3 select-none" onClick={() => setActiveTab('booking')}>
-            {/* Elegant SVG Logo representation from user's image */}
-            <div className="w-11 h-11 shrink-0 bg-white/50 p-1.5 rounded-full border border-stone-200/40 shadow-sm flex items-center justify-center">
-              <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-8 h-8">
-                {/* Left Head Outline (Sage/Teal `#7FA99B`) */}
-                <path d="M38,30 C30,30 25,35 25,48 C25,58 29,62 25,68 C22,72 25,75 29,75 C31,78 32,82 34,85" stroke="#7FA99B" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                {/* Right Head Outline (Beige/Gold `#CBB696`) */}
-                <path d="M62,30 C70,30 75,35 75,48 C75,58 71,62 75,68 C78,72 75,75 71,75 C69,78 68,82 66,85" stroke="#CBB696" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                {/* Middle Psi & Tree structure in Gold `#BFAA80` */}
-                <path d="M50,72 V50" stroke="#BFAA80" strokeWidth="3.5" strokeLinecap="round" />
-                <path d="M42,48 C42,60 58,60 58,48" stroke="#BFAA80" strokeWidth="3" strokeLinecap="round" />
-                {/* Tree branches extending upwards */}
-                <path d="M50,52 Q44,40 40,37" stroke="#BFAA80" strokeWidth="2" strokeLinecap="round" />
-                <path d="M50,47 Q56,36 60,34" stroke="#BFAA80" strokeWidth="2" strokeLinecap="round" />
-                {/* Colored Nodes (Thought Leaves) representative of the logo */}
-                <circle cx="39" cy="36" r="3.5" fill="#7FA99B" />
-                <circle cx="50" cy="30" r="3.5" fill="#CBB696" />
-                <circle cx="61" cy="34" r="3" fill="#FAF4EE" stroke="#CBB696" strokeWidth="1" />
-                <circle cx="43" cy="27" r="2.5" fill="#B9CFD7" />
-                <circle cx="56" cy="25" r="3.5" fill="#7FA99B" />
-              </svg>
-            </div>
-            
-            <div className="flex flex-col">
-              <span className="font-serif font-bold text-lg md:text-xl tracking-tight leading-none">
-                <span className="text-[#CBB696]">Centrum</span> <span className="text-[#477267]">Analizy Zachowania</span>
-              </span>
-              <span className="text-[10px] md:text-xs font-serif italic text-stone-500 mt-1 font-semibold tracking-wide">
-                mgr Noemi Krauze-Piwowar
-              </span>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-col items-stretch gap-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-left cursor-pointer flex items-center gap-2 sm:gap-3 select-none" onClick={() => setActiveTab('booking')}>
+              {/* Elegant SVG Logo representation from user's image */}
+              <div className="w-9 h-9 sm:w-11 sm:h-11 shrink-0 bg-white/50 p-1 rounded-full border border-stone-200/40 shadow-sm flex items-center justify-center">
+                <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 sm:w-8 sm:h-8">
+                  {/* Left Head Outline (Sage/Teal `#7FA99B`) */}
+                  <path d="M38,30 C30,30 25,35 25,48 C25,58 29,62 25,68 C22,72 25,75 29,75 C31,78 32,82 34,85" stroke="#7FA99B" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                  {/* Right Head Outline (Beige/Gold `#CBB696`) */}
+                  <path d="M62,30 C70,30 75,35 75,48 C75,58 71,62 75,68 C78,72 75,75 71,75 C69,78 68,82 66,85" stroke="#CBB696" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                  {/* Middle Psi & Tree structure in Gold `#BFAA80` */}
+                  <path d="M50,72 V50" stroke="#BFAA80" strokeWidth="3.5" strokeLinecap="round" />
+                  <path d="M42,48 C42,60 58,60 58,48" stroke="#BFAA80" strokeWidth="3" strokeLinecap="round" />
+                  {/* Tree branches extending upwards */}
+                  <path d="M50,52 Q44,40 40,37" stroke="#BFAA80" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M50,47 Q56,36 60,34" stroke="#BFAA80" strokeWidth="2" strokeLinecap="round" />
+                  {/* Colored Nodes (Thought Leaves) representative of the logo */}
+                  <circle cx="39" cy="36" r="3.5" fill="#7FA99B" />
+                  <circle cx="50" cy="30" r="3.5" fill="#CBB696" />
+                  <circle cx="61" cy="34" r="3" fill="#FAF4EE" stroke="#CBB696" strokeWidth="1" />
+                  <circle cx="43" cy="27" r="2.5" fill="#B9CFD7" />
+                  <circle cx="56" cy="25" r="3.5" fill="#7FA99B" />
+                </svg>
+              </div>
+              
+              <div className="flex flex-col">
+                <span className="font-serif font-bold text-sm sm:text-lg md:text-xl tracking-tight leading-none">
+                  <span className="text-[#CBB696]">Centrum</span> <span className="text-[#477267]">Analizy Zachowania</span>
+                </span>
+                <span className="text-[9px] sm:text-[10px] md:text-xs font-serif italic text-stone-500 mt-0.5 sm:mt-1 font-semibold tracking-wide hidden sm:block">
+                  mgr Noemi Krauze-Piwowar
+                </span>
+              </div>
             </div>
           </div>
 
-          {/* Nav pills */}
-          <nav className="flex items-center flex-wrap gap-1.5 bg-stone-100 p-1.5 rounded-2xl border border-stone-200/40">
+          {/* Nav pills - scrollable on mobile */}
+          <nav className="flex items-center gap-1 sm:gap-1.5 bg-stone-100 p-1 rounded-xl sm:rounded-2xl border border-stone-200/40 overflow-x-auto scrollbar-hide">
             <button
               onClick={() => setActiveTab('booking')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition tracking-wide ${
+              className={`flex-shrink-0 px-3 sm:px-4 py-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs md:text-sm font-semibold transition tracking-wide ${
                 activeTab === 'booking'
                   ? 'bg-[#477267] text-[#FFFDF4] shadow-sm'
                   : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/50'
               }`}
             >
-              Grafik Wizyt
+              Grafik
             </button>
             <button
               onClick={() => setActiveTab('appointments')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition tracking-wide flex items-center gap-1.5 ${
+              className={`flex-shrink-0 px-3 sm:px-4 py-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs md:text-sm font-semibold transition tracking-wide flex items-center gap-1 sm:gap-1.5 ${
                 activeTab === 'appointments'
                   ? 'bg-[#477267] text-[#FFFDF4] shadow-sm'
                   : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/50'
               }`}
             >
-              Moje Wizyty & SMS
+              Wizyty
               {appointments.length > 0 && (
-                <span className="inline-flex h-2 w-2 rounded-full bg-red-500 animate-ping" />
+                <span className="inline-flex h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-red-500 animate-ping" />
               )}
             </button>
             <button
               onClick={() => setActiveTab('about')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition tracking-wide ${
+              className={`flex-shrink-0 px-3 sm:px-4 py-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs md:text-sm font-semibold transition tracking-wide ${
                 activeTab === 'about'
                   ? 'bg-[#477267] text-[#FFFDF4] shadow-sm'
                   : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/50'
               }`}
             >
-              O Gabinecie
+              Gabinet
             </button>
             <button
               onClick={() => setActiveTab('faq')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold transition tracking-wide ${
+              className={`flex-shrink-0 px-3 sm:px-4 py-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs md:text-sm font-semibold transition tracking-wide ${
                 activeTab === 'faq'
                   ? 'bg-[#477267] text-[#FFFDF4] shadow-sm'
                   : 'text-stone-600 hover:text-stone-900 hover:bg-stone-200/50'
               }`}
             >
-              Pomoc & FAQ
+              Pomoc
             </button>
+
           </nav>
         </div>
       </header>
@@ -317,7 +400,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -5 }}
               transition={{ duration: 0.2 }}
-              className="max-w-6xl mx-auto px-6 py-8 md:py-12 space-y-12"
+              className="max-w-6xl mx-auto px-4 sm:px-6 py-8 md:py-12 space-y-12"
             >
               {/* BRAND HERO HIGHLIGHT */}
               <section className="bg-gradient-to-br from-[#FAF6F0] to-[#E8EFEA] rounded-3xl p-6 md:p-10 border border-stone-200/60 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-8 shadow-sm">
@@ -398,36 +481,33 @@ export default function App() {
                   {filteredDoctors.map((doc) => (
                     <div 
                       key={doc.id}
-                      className="bg-white border border-stone-200 rounded-3xl p-5 md:p-6 flex flex-col justify-between hover:shadow-md hover:border-[#477267]/20 transition duration-300 relative group"
+                      className="bg-white border border-stone-200 rounded-2xl p-4 sm:p-5 flex flex-col hover:shadow-lg hover:border-[#477267]/30 transition duration-300 relative"
                     >
                       
-                      <div className="flex flex-col sm:flex-row items-start gap-4 text-left">
+                      <div className="flex items-start gap-3 sm:gap-4 text-left">
                         {/* Avatar */}
                         <img 
                           src={doc.avatarUrl} 
                           alt={doc.name} 
-                          className="w-16 h-16 rounded-3xl object-cover shrink-0 border border-stone-100/80" 
+                          className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl object-cover shrink-0" 
                         />
                         
-                        <div className="space-y-1.5 flex-1">
-                          <div className="flex items-center flex-wrap gap-2 justify-between">
-                            <h3 className="font-bold text-lg font-serif text-[#477267]">{doc.name}</h3>
-                            <div className="flex items-center gap-1 bg-yellow-400/10 text-yellow-700 px-2 py-0.5 rounded-lg text-xs font-semibold">
-                              <Star className="w-3.5 h-3.5 fill-yellow-500 text-yellow-500" />
-                              <span>{doc.rating}</span>
-                              <span className="text-[10px] text-stone-400">({doc.reviewsCount})</span>
+                        <div className="space-y-1 flex-1">
+                          <div className="flex items-center gap-2 justify-between">
+                            <h3 className="font-bold text-sm sm:text-base font-serif text-[#477267] truncate">{doc.name}</h3>
+                            <div className="flex items-center gap-0.5 bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-md text-[10px] font-semibold shrink-0">
+                              <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                              {doc.rating}
                             </div>
                           </div>
 
-                          <p className="text-xs text-[#477267] font-mono leading-none">{doc.title}</p>
-                          <p className="text-xs text-stone-550 leading-relaxed line-clamp-2 pr-4">{doc.description}</p>
+                          <p className="text-[10px] sm:text-xs text-[#477267] font-mono leading-tight">{doc.title}</p>
                           
-                          {/* Specializations inline tag index */}
-                          <div className="flex flex-wrap gap-1 pt-1 bg-transparent">
-                            {doc.specializations.map((spec) => (
+                          <div className="flex flex-wrap gap-1 pt-1">
+                            {doc.specializations.slice(0, 3).map((spec) => (
                               <span 
                                 key={spec} 
-                                className="px-2 py-0.5 bg-stone-100 text-stone-600 text-[10px] font-mono rounded"
+                                className="px-1.5 py-0.5 bg-stone-100 text-stone-600 text-[9px] font-mono rounded"
                               >
                                 {spec}
                               </span>
@@ -437,16 +517,35 @@ export default function App() {
                       </div>
 
                       {/* Interactive calendar timeline slider */}
-                      <div className="mt-5 border-t border-stone-100 pt-4 space-y-3 text-left bg-transparent">
-                        <span className="block text-[10px] uppercase tracking-wider font-semibold font-mono text-stone-400">
-                          Rezerwacja terminu na najbliższe dni:
-                        </span>
+                      <div className="mt-4 pt-3 border-t border-stone-100 space-y-3 text-left">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] uppercase tracking-wider font-semibold font-mono text-stone-400">
+                            Terminy:
+                          </span>
+                          <div className="flex bg-stone-100 rounded-lg p-0.5">
+                            <button 
+                              onClick={() => setCurrentWeekOffset(0)}
+                              className={`px-2 py-0.5 rounded text-[9px] font-bold ${currentWeekOffset === 0 ? 'bg-white text-[#477267] shadow-sm' : 'text-stone-500'}`}
+                            >
+                              Tydzień 1
+                            </button>
+                            <button 
+                              onClick={() => setCurrentWeekOffset(1)}
+                              className={`px-2 py-0.5 rounded text-[9px] font-bold ${currentWeekOffset === 1 ? 'bg-white text-[#477267] shadow-sm' : 'text-stone-500'}`}
+                            >
+                              Tydzień 2
+                            </button>
+                          </div>
+                        </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          {Object.keys(doc.slots).map((dateStr) => {
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {Object.keys(doc.slots).filter(dateStr => {
+                              const dateObj = new Date(dateStr + 'T00:00:00Z');
+                              const baseDate = new Date('2026-05-22T00:00:00Z');
+                              const diffDays = Math.floor((dateObj.getTime() - baseDate.getTime()) / (1000 * 60 * 60 * 24));
+                              return currentWeekOffset === 0 ? (diffDays >= 0 && diffDays <= 7) : (diffDays > 7 && diffDays <= 14);
+                          }).map((dateStr) => {
                             const availableHours = doc.slots[dateStr] || [];
-                            
-                            // Transform date into beautiful written Polish form like "Sobota 23.05"
                             const testDateObj = new Date(dateStr);
                             const localizedDay = testDateObj.toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'numeric' });
 
@@ -456,7 +555,7 @@ export default function App() {
                                   {localizedDay}
                                 </span>
 
-                                <div className="space-y-1">
+                                <div className="grid grid-cols-2 gap-1">
                                   {availableHours.map((slot) => {
                                     const isSlotBooked = appointments.some(appt => 
                                       appt.doctorId === doc.id && 
@@ -474,22 +573,16 @@ export default function App() {
                                           setSelectedDateForBooking(dateStr);
                                           setSelectedSlotForBooking(slot);
                                         }}
-                                        className={`w-full py-1 rounded-lg text-[11px] font-semibold transition tracking-tight select-none text-center block border ${
+                                        className={`w-full py-1 rounded text-[10px] font-semibold transition text-center border ${
                                           isSlotBooked
-                                            ? 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed line-through'
-                                            : 'bg-white border-stone-200/80 text-stone-700 hover:bg-[#477267] hover:text-white cursor-pointer'
+                                            ? 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed'
+                                            : 'bg-white border-stone-200 text-stone-700 hover:bg-[#477267] hover:text-white cursor-pointer'
                                         }`}
                                       >
-                                        {isSlotBooked ? 'Zajęty' : slot}
+                                        {isSlotBooked ? 'X' : slot}
                                       </button>
                                     );
                                   })}
-
-                                  {availableHours.length === 0 && (
-                                    <span className="text-[10px] text-stone-400 italic block text-center py-2">
-                                      Brak wolnych slots
-                                    </span>
-                                  )}
                                 </div>
                               </div>
                             );
@@ -497,16 +590,11 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Card utility section representing cost info */}
-                      <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between text-xs text-stone-500 font-sans">
-                        <span className="flex items-center gap-1">
-                          Dotyczy wizyt lekarskich online / gabinet
-                        </span>
-                        <span className="font-bold text-stone-800 bg-stone-100 px-3 py-1 rounded-xl">
-                          {doc.price} PLN / sesja
+                      <div className="mt-3 pt-3 border-t border-stone-100 flex items-center justify-between text-[10px] text-stone-500 font-sans">
+                        <span className="font-bold text-stone-800 bg-stone-100 px-2 py-0.5 rounded-lg">
+                          {doc.price} PLN
                         </span>
                       </div>
-
                     </div>
                   ))}
 
@@ -548,7 +636,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -5 }}
               transition={{ duration: 0.2 }}
-              className="max-w-6xl mx-auto px-6 py-8 md:py-12 space-y-8"
+              className="max-w-6xl mx-auto px-4 sm:px-6 py-8 md:py-12 space-y-8"
             >
               
               {/* BRAND HEADER BOARD */}
@@ -673,7 +761,7 @@ export default function App() {
                                   <Clock className="w-3.5 h-3.5" /> {appt.timeSlot}
                                 </span>
                                 <span className="flex items-center gap-1">
-                                  <User className="w-3.5 h-3.5" /> Pacjent: {appt.patientName}
+                                  <UserIcon className="w-3.5 h-3.5" /> Pacjent: {appt.patientName}
                                 </span>
                                 <span className="flex items-center gap-1 font-mono">
                                   <Phone className="w-3.5 h-3.5" /> {appt.patientPhone}
@@ -787,7 +875,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -5 }}
               transition={{ duration: 0.2 }}
-              className="max-w-4xl mx-auto px-6 py-8 md:py-12 space-y-12 text-left"
+              className="max-w-4xl mx-auto px-4 sm:px-6 py-8 md:py-12 space-y-12 text-left"
             >
               
               {/* STYLISH ABOUT CONTENT */}
@@ -907,6 +995,9 @@ export default function App() {
 
             </motion.div>
           )}
+          {activeTab === 'doctor' && (
+            <DoctorDashboard onLogin={handleLogin} />
+          )}
         </AnimatePresence>
 
       </main>
@@ -951,7 +1042,13 @@ export default function App() {
 
         <div className="max-w-6xl mx-auto border-t border-stone-800/80 pt-6 mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-stone-500 font-sans">
           <p>&copy; 2026 Centrum Analizy Zachowania. Wszelkie prawa zastrzeżone.</p>
-          <div className="flex gap-4">
+          <div className="flex gap-4 items-center">
+            <button 
+              onClick={() => { setActiveTab('doctor'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+              className="text-[#7FA99B] hover:text-white font-bold cursor-pointer"
+            >
+              Może jesteś lekarzem? Zaloguj się.
+            </button>
             <a href="#" className="hover:text-stone-300">Polityka prywatności ROODO</a>
             <a href="#" className="hover:text-stone-300">Regulamin usług lekarskich</a>
           </div>
@@ -965,6 +1062,8 @@ export default function App() {
             doctor={selectedDoctorForBooking}
             date={selectedDateForBooking}
             timeSlot={selectedSlotForBooking}
+            token={token}
+            onLogin={handleLogin}
             onClose={() => setSelectedDoctorForBooking(null)}
             onSuccess={handleBookingSuccess}
           />

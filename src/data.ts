@@ -7,18 +7,35 @@ export function getFutureDateString(daysAhead: number): string {
   return d.toISOString().split('T')[0];
 }
 
+// Helper to provide a range of dates for 2 weeks
+export function getAvailableDaysRange(): string[] {
+  const dates: string[] = [];
+  const baseDate = new Date('2026-05-22T19:01:56Z');
+  for (let i = 0; i < 14; i++) {
+    const d = new Date(baseDate);
+    d.setUTCDate(baseDate.getUTCDate() + i);
+    dates.push(d.toISOString().split('T')[0]);
+  }
+  return dates;
+}
+
 // Helper to dynamically calculate stable future days of the week for the calendar
-export function getNextDayOfWeekString(targetDay: number): string {
+export function getNextDayOfWeekString(targetDay: number, weekOffset: number = 0): string {
   // targetDay: 0 = Sunday, 1 = Monday, 2 = Tuesday, 3 = Wednesday, 4 = Thursday, 5 = Friday, 6 = Saturday
   const today = new Date('2026-05-22T19:01:56Z'); // Stable base date matching context
   const resultDate = new Date(today);
   const currentDay = today.getUTCDay();
   
-  let daysToAdd = targetDay - currentDay;
-  if (daysToAdd <= 0) {
-    daysToAdd += 7;
+  // Calculate days until next target day in the current week
+  let daysUntilNextTarget = targetDay - currentDay;
+  if (daysUntilNextTarget <= 0) {
+    daysUntilNextTarget += 7;
   }
-  resultDate.setUTCDate(today.getUTCDate() + daysToAdd);
+  
+  // Add weeks offset
+  const totalDaysToAdd = daysUntilNextTarget + (weekOffset * 7);
+  
+  resultDate.setUTCDate(today.getUTCDate() + totalDaysToAdd);
   return resultDate.toISOString().split('T')[0];
 }
 
@@ -32,12 +49,17 @@ export const DOCTORS: Doctor[] = [
     rating: 5.0,
     reviewsCount: 184,
     avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=256&auto=format&fit=crop',
-    specializations: ['Analiza Zachowania', 'Psychoterapia', 'Rozwój osobisty', 'Wsparcie kryzysowe'],
+    specializations: ['Analiza Zachowania', 'Psychoterapia', 'Rozwój osobisty', 'Wsparcie kryzystowe'],
     languages: ['Polski', 'Angielski'],
     slots: {
-      [getNextDayOfWeekString(3)]: ['14:00', '15:00', '16:00', '17:00', '18:00'], // Środa (Wed) from 14:00 to 18:00
-      [getNextDayOfWeekString(4)]: ['17:00', '18:00', '19:00'],                  // Czwartek (Thu) from 17:00 to 19:00
-      [getNextDayOfWeekString(5)]: ['16:00', '17:00', '18:00', '19:00'],          // Piątek (Fri) from 16:00 to 19:00
+      // Week 1
+      [getNextDayOfWeekString(3, 0)]: ['14:00', '15:00', '16:00', '17:00', '18:00'],
+      [getNextDayOfWeekString(4, 0)]: ['17:00', '18:00', '19:00'],
+      [getNextDayOfWeekString(5, 0)]: ['16:00', '17:00', '18:00', '19:00'],
+      // Week 2
+      [getNextDayOfWeekString(3, 1)]: ['14:00', '15:00', '16:00', '17:00', '18:00'],
+      [getNextDayOfWeekString(4, 1)]: ['17:00', '18:00', '19:00'],
+      [getNextDayOfWeekString(5, 1)]: ['16:00', '17:00', '18:00', '19:00'],
     }
   }
 ];

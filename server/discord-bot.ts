@@ -12,11 +12,17 @@ let commandsChannelId: string | null = null;
 let getAppointmentsList: () => any[] = () => [];
 let saveAppointmentsList: (data: any[]) => void = () => {};
 let sendNotifications: (appt: any) => Promise<void> = async () => {};
+let getPageViews: () => Record<string, number> = () => ({});
+let getSystemState: () => { systemLocked: boolean } = () => ({ systemLocked: false });
+let setSystemLocked: (locked: boolean) => void = () => {};
 
 export function initDiscordBot(
   readDB: () => any[],
   writeDB: (data: any[]) => void,
-  triggerSMSReminder: (appt: any) => Promise<void>
+  triggerSMSReminder: (appt: any) => Promise<void>,
+  pageViews: Record<string, number> = {},
+  getSystemStateFn?: () => { systemLocked: boolean },
+  setSystemLockedFn?: (locked: boolean) => void
 ) {
   const token = process.env.DISCORD_BOT_TOKEN;
   
@@ -28,6 +34,9 @@ export function initDiscordBot(
   getAppointmentsList = readDB;
   saveAppointmentsList = writeDB;
   sendNotifications = triggerSMSReminder;
+  getPageViews = () => pageViews;
+  if(getSystemStateFn) getSystemState = getSystemStateFn;
+  if(setSystemLockedFn) setSystemLocked = setSystemLockedFn;
 
   if (!token || token.trim() === '') {
     console.log('[DISCORD BOT] Brak DISCORD_BOT_TOKEN w .env. Bot Discorda nie został uruchomiony.');
@@ -87,38 +96,39 @@ export function initDiscordBot(
       // Check if command prefixes are used
       if (!content.startsWith('!')) return;
 
-      const isPerformanceCommand = content === '!wydajność' || content === '!performance';
-
       // STRICT CHECK: Commands can ONLY be executed in the Admin/Commands Channel
       if (commandsChannelId && message.channel.id !== commandsChannelId) {
-        // Exception: Performance command is allowed in Logs Channel if configured
-        if (isPerformanceCommand && logsChannelId && message.channel.id === logsChannelId) {
-          // Proceed to execution
+        // Special allowance: !wydajność is allowed in logs channel
+        if (content === '!wydajność' && logsChannelId && message.channel.id === logsChannelId) {
+          // Allow: proceed to command execution
         } else {
-        // Find if this is a supported command, and if so, gently redirect the user
-        const knownCommands = ['!pomoc', '!help', '!wizyty', '!list', '!potwierdz', '!confirm', '!anuluj', '!cancel', '!szczegoly', '!details', '!zresetuj', '!wydajność', '!performance'];
-        const mainPrefix = content.split(' ')[0];
-        
-        if (knownCommands.includes(mainPrefix)) {
-          const redirectEmbed = new EmbedBuilder()
-            .setTitle('⚠️ Odmowa dostępu')
-            .setDescription(`Zarządzanie systemem Centrum Analizy Zachowania jest dozwolone wyłącznie na dedykowanym kanale sterowania: <#${commandsChannelId}>.`)
-            .setColor(0xd93838);
-          await message.reply({ embeds: [redirectEmbed] }).catch(() => {});
-        }
-        return;
+          // Find if this is a supported command, and if so, gently redirect the user
+          const knownCommands = ['!pomoc', '!help', '!wizyty', '!list', '!potwierdz', '!confirm', '!anuluj', '!cancel', '!szczegoly', '!details', '!zresetuj', '!wykres', '!wydajnosc', '!wydajność', '!ping', '!lock', '!unlock', '!statystyki', '!backup', '!szukaj', '!dzisiaj', '!jutro', '!wiadomosc', '!linki'];
+          const mainPrefix = content.split(' ')[0];
+          
+          if (knownCommands.includes(mainPrefix)) {
+            const redirectEmbed = new EmbedBuilder()
+              .setTitle('⚠️ Odmowa dostępu')
+              .setDescription(`Zarządzanie systemem Centrum Analizy Zachowania jest dozwolone wyłącznie na dedykowanym kanale sterowania: <#${commandsChannelId}>.`)
+              .setColor(0xd93838);
+            await message.reply({ embeds: [redirectEmbed] }).catch(() => {});
+          }
+          return;
         }
       }
 
-      // Performance check command
-      if (isPerformanceCommand) {
-        const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
+      // Performance check
+      if (content === '!wydajność' || content === '!wydajnosc') {
+        const memObj = process.memoryUsage();
+        const memoryRss = memObj.rss / 1024 / 1024;
+        const memoryHeap = memObj.heapUsed / 1024 / 1024;
         const loadAvg = os.loadavg();
         
         const perfEmbed = new EmbedBuilder()
-          .setTitle('📊 Wydajność Serwera • Centrum Analizy Zachowania')
+          .setTitle('📊 Wydajność Serwera')
           .addFields(
-            { name: '💾 Użycie RAM', value: `${memoryUsage.toFixed(2)} MB`, inline: true },
+            { name: '💾 Użycie RAM (RSS)', value: `${memoryRss.toFixed(1)} MB`, inline: true },
+            { name: '💾 Pamięć podręczna (Heap)', value: `${memoryHeap.toFixed(1)} MB`, inline: true },
             { name: '⚙️ Obciążenie CPU (avg)', value: `${loadAvg[0].toFixed(2)}, ${loadAvg[1].toFixed(2)}, ${loadAvg[2].toFixed(2)}`, inline: true }
           )
           .setColor(0x477267)
@@ -138,9 +148,11 @@ export function initDiscordBot(
             { name: '✅ `!potwierdz <id>`', value: 'Zatwierdza rezerwację (pacjent otrzyma prawdziwy e-mail/SMS potwierdzający).' },
             { name: '❌ `!anuluj <id>`', value: 'Anuluje wybraną rezerwację i zwalnia termin.' },
             { name: '🔍 `!szczegoly <id>`', value: 'Wyświetla dane kontaktowe (e-mail, telefon, historię wysłanych alertów).' },
+            { name: '📈 `!wykres`', value: 'Wysyła wykresy statystyk (wizyty i odwiedziny na stronie).' },
+            { name: '📊 `!wydajnosc`', value: 'Sprawdza zużycie pamięci (RAM), CPU i ogólny stan serwera.' },
             { name: '🔥 `!zresetuj`', value: 'Usuwa całkowicie WSZYSTKIE wizyty w systemie.' },
             { name: '🗑️ `!zresetuj <e-mail_lub_telefon>`', value: 'Usuwa wszystkie rezerwacje powiązane z podanym adresem e-mail lub telefonem.' },
-            { name: '📊 `!wydajność`', value: 'Sprawdza aktualne zużycie zasobów serwera.' }
+            { name: '🌐 Pozostałe komendy:', value: '`!ping`, `!lock`, `!unlock`, `!statystyki`, `!backup`, `!szukaj <fraza>`, `!dzisiaj`, `!jutro`, `!wiadomosc <id> <text>`, `!linki`' }
           )
           .setColor(0x477267)
           .setFooter({ text: 'Centrum Analizy Zachowania • Panel Administratora' });
@@ -312,6 +324,69 @@ export function initDiscordBot(
         return;
       }
 
+      // Chart Command (QuickChart io integration)
+      if (content === '!wykres' || content === '!wykresy') {
+        const appts = getAppointmentsList();
+        const views = getPageViews();
+
+        const pending = appts.filter(a => a.status === 'pending_payment').length;
+        const confirmed = appts.filter(a => a.status === 'confirmed').length;
+        const cancelled = appts.filter(a => a.status === 'cancelled').length;
+        
+        // Setup appointment pie chart
+        const apptChartConfig = {
+            type: 'outlabeledPie',
+            data: {
+                labels: ['Oczekujące', 'Opłacone', 'Anulowane'],
+                datasets: [{
+                    data: [pending, confirmed, cancelled],
+                    backgroundColor: ['#ffb74d', '#4caf50', '#ef5350'],
+                }]
+            },
+            options: {
+                plugins: { legend: false }
+            }
+        };
+
+        const today = new Date().toISOString().split('T')[0];
+        const last7Days = Array.from({length: 7}, (_, i) => {
+            const d = new Date();
+            d.setDate(d.getDate() - (6 - i));
+            return d.toISOString().split('T')[0];
+        });
+
+        const viewData = last7Days.map(date => views[date] || 0);
+
+        // Setup page views bar chart
+        const viewsChartConfig = {
+            type: 'bar',
+            data: {
+                labels: last7Days.map(d => d.slice(5)),
+                datasets: [{
+                    label: 'Odwiedziny',
+                    data: viewData,
+                    backgroundColor: '#477267'
+                }]
+            }
+        };
+
+        const apptChartUrl = `https://quickchart.io/chart?w=400&h=300&c=${encodeURIComponent(JSON.stringify(apptChartConfig))}`;
+        const viewsChartUrl = `https://quickchart.io/chart?w=400&h=300&c=${encodeURIComponent(JSON.stringify(viewsChartConfig))}`;
+
+        const embedAppt = new EmbedBuilder()
+            .setTitle('📈 Statystyki Wizyt')
+            .setImage(apptChartUrl)
+            .setColor(0x477267);
+
+        const embedViews = new EmbedBuilder()
+            .setTitle('📊 Odwiedziny Platformy (ostatnie 7 dni)')
+            .setImage(viewsChartUrl)
+            .setColor(0x477267);
+
+        await message.reply({ embeds: [embedAppt, embedViews] }).catch(() => {});
+        return;
+      }
+
       // Reset command for clearing all appointments or finding a user match (email/phone)
       if (content.startsWith('!zresetuj')) {
         const parts = content.split(' ');
@@ -389,6 +464,122 @@ export function initDiscordBot(
         }
         return;
       }
+
+      // --- NEW 10 COMMANDS ---
+      if (content === '!ping') {
+        const uptime = process.uptime();
+        await message.reply(`🏓 Pong! Bot działa. Uptime: ${(uptime / 3600).toFixed(2)}h`).catch(()=>{});
+        return;
+      }
+
+      if (content === '!lock') {
+        setSystemLocked(true);
+        await message.reply('🔒 System rejestracji został ZABLOKOWANY (przerwa techniczna). Pacjenci nie mogą zapisywać się na wizyty.').catch(()=>{});
+        return;
+      }
+
+      if (content === '!unlock') {
+        setSystemLocked(false);
+        await message.reply('🔓 System rejestracji został ODBLOKOWANY.').catch(()=>{});
+        return;
+      }
+
+      if (content === '!statystyki') {
+        const appts = getAppointmentsList();
+        const views = getPageViews();
+        const viewsTotal = Object.values(views).reduce((a, b) => a + b, 0);
+        const revenue = appts.filter(a => a.status === 'confirmed').length * 200;
+        const statsEmbed = new EmbedBuilder()
+          .setTitle('📈 Główne Statystyki')
+          .addFields(
+            { name: '👥 Wszystkie rezerwacje', value: `${appts.length}`, inline: true },
+            { name: '✅ Potwierdzone', value: `${appts.filter(a=>a.status === 'confirmed').length}`, inline: true },
+            { name: '💰 Szacowany obrót', value: `${revenue} PLN`, inline: true },
+            { name: '👁️ Odsłony strony (suma)', value: `${viewsTotal}`, inline: true }
+          ).setColor(0x477267);
+        await message.reply({ embeds: [statsEmbed] }).catch(()=>{});
+        return;
+      }
+
+      if (content === '!backup') {
+        import('fs').then(fs => {
+            const tempFile = './backup_temp.json';
+            fs.writeFileSync(tempFile, JSON.stringify(getAppointmentsList(), null, 2));
+            message.reply({
+              content: '📂 Oto najnowszy plik z kopią zapasową bazy danych (JSON).',
+              files: [tempFile]
+            }).catch(()=>{});
+        });
+        return;
+      }
+
+      if (content.startsWith('!szukaj ')) {
+        const query = content.substring('!szukaj '.length).trim().toLowerCase();
+        const matches = getAppointmentsList().filter(a => 
+          a.patientName.toLowerCase().includes(query) || 
+          a.patientEmail?.toLowerCase().includes(query)
+        );
+        if(matches.length === 0) {
+          await message.reply(`❌ Nie znaleziono pacjenta z frazą: ${query}`).catch(()=>{});
+          return;
+        }
+        let txt = matches.map(a => `\`${a.id}\` | ${a.patientName} | ${a.date} | ${a.status}`).join('\n');
+        if (txt.length > 2000) txt = txt.substring(0, 1990) + '...';
+        await message.reply(`🔍 **Wyniki wyszukiwania** dla \`${query}\`:\n${txt}`).catch(()=>{});
+        return;
+      }
+
+      if (content === '!dzisiaj') {
+        const today = new Date().toISOString().split('T')[0];
+        const matches = getAppointmentsList().filter(a => a.date === today && a.status !== 'cancelled');
+        if(matches.length === 0) {
+          await message.reply('Brak aktywnych wizyt na dzisiaj.').catch(()=>{}); return;
+        }
+        const txt = matches.map(a => `\`${a.id}\` | ${a.timeSlot} | **${a.patientName}**`).join('\n');
+        await message.reply(`📅 **Dzisiejsze wizyty (${today}):**\n${txt}`).catch(()=>{});
+        return;
+      }
+
+      if (content === '!jutro') {
+        const d = new Date(); d.setDate(d.getDate() + 1);
+        const tomorrow = d.toISOString().split('T')[0];
+        const matches = getAppointmentsList().filter(a => a.date === tomorrow && a.status !== 'cancelled');
+        if(matches.length === 0) {
+          await message.reply('Brak aktywnych wizyt na jutro.').catch(()=>{}); return;
+        }
+        const txt = matches.map(a => `\`${a.id}\` | ${a.timeSlot} | **${a.patientName}**`).join('\n');
+        await message.reply(`📅 **Jutrzejsze wizyty (${tomorrow}):**\n${txt}`).catch(()=>{});
+        return;
+      }
+
+      if (content.startsWith('!wiadomosc ')) {
+        const args = content.split(' ');
+        if (args.length < 3) {
+          await message.reply('Użycie: `!wiadomosc <id_wizyty> <treść...>`').catch(()=>{}); return;
+        }
+        const id = args[1];
+        const msg = args.slice(2).join(' ');
+        const appts = getAppointmentsList();
+        const appt = appts.find(a => a.id === id);
+        if (!appt) {
+          await message.reply('❌ Nie znaleziono takiej wizyty.').catch(()=>{}); return;
+        }
+        appt.smsLog = (appt.smsLog || '') + `\n[Discord Admin] Niestandardowa wiadomość: ${msg}`;
+        saveAppointmentsList(appts);
+        await message.reply(`✉️ Przypięto wiadomość administracyjną do logów pacjenta **${appt.patientName}**.`).catch(()=>{});
+        return;
+      }
+
+      if (content === '!linki') {
+        const links = new EmbedBuilder()
+          .setTitle('🔗 Linki do platformy')
+          .setDescription(`Główny portal pacjenta: ${process.env.APP_URL || 'Brak wpisanego APP_URL'}
+          \nPanel Lekarza: \`/doctor\``)
+          .setColor(0x477267);
+        await message.reply({ embeds: [links] }).catch(()=>{});
+        return;
+      }
+
     });
 
     discordClient.login(token);
@@ -447,3 +638,4 @@ export async function notifyDiscordNewBooking(appt: any) {
     }
   }
 }
+
