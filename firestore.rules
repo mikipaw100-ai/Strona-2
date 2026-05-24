@@ -1,8 +1,11 @@
-node_modules/
-build/
-dist/
-coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /appointments/{document=**} {
+      allow read, write: if true;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
